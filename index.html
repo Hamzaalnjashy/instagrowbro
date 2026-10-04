@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>لوحة الطلبات</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1b1f24;--mu:#6b7480;--bd:#dfe3e8;--ac:#2563eb}
+@media(prefers-color-scheme:dark){:root{--bg:#14171a;--card:#1d2125;--tx:#e8eaed;--mu:#9aa3ad;--bd:#2d333a;--ac:#5b8def}}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,"Segoe UI",Tahoma,sans-serif;background:var(--bg);color:var(--tx)}
+header{display:flex;gap:8px;flex-wrap:wrap;padding:12px 16px;background:var(--card);border-bottom:1px solid var(--bd)}
+header button{border:0;background:none;color:var(--mu);padding:8px 14px;border-radius:8px;cursor:pointer;font:inherit}
+header button.on{background:var(--ac);color:#fff}
+main{max-width:900px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:16px}
+input,select,button.b{font:inherit;padding:9px 11px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);width:100%;margin:4px 0 10px}
+button.b{background:var(--ac);color:#fff;border:0;cursor:pointer;width:auto;margin:0}
+button.s{background:none;color:var(--mu);border:1px solid var(--bd)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:8px;border-bottom:1px solid var(--bd);text-align:right}
+.wrap{overflow-x:auto}
+.mu{color:var(--mu);font-size:13px}
+#msg{position:fixed;bottom:16px;left:16px;right:16px;max-width:500px;margin:auto;background:var(--tx);color:var(--bg);padding:10px 14px;border-radius:8px;display:none}
+</style>
+</head>
+<body>
+<header>
+  <button data-t="prov" class="on">المزوّدون</button>
+  <button data-t="new">طلب جديد</button>
+  <button data-t="ord">الطلبات</button>
+</header>
+<main>
+<section id="prov">
+  <div class="card">
+    <b>إضافة مزوّد</b>
+    <p class="mu">يُحفظ المفتاح في متصفحك فقط (localStorage) ولا يُرفع إلى GitHub. استخدم هذه الصفحة من جهازك وحدك.</p>
+    <input id="pn" placeholder="اسم المزوّد">
+    <input id="pu" placeholder="رابط الـ API (مثال: https://site.com/api/v2)" dir="ltr">
+    <input id="pk" placeholder="مفتاح الـ API" type="password" dir="ltr">
+    <button class="b" onclick="addProv()">إضافة</button>
+  </div>
+  <div id="plist"></div>
+</section>
+
+<section id="new" hidden>
+  <div class="card">
+    <select id="np" onchange="loadSvc()"></select>
+    <input id="nq" placeholder="بحث في الخدمات..." oninput="renderSvc()">
+    <select id="ns" size="8"></select>
+    <div class="mu" id="si"></div>
+    <input id="nl" placeholder="الرابط (https://...)" dir="ltr">
+    <input id="nn" type="number" placeholder="الكمية">
+    <button class="b" id="ob" onclick="send()">إرسال الطلب</button>
+  </div>
+</section>
+
+<section id="ord" hidden>
+  <div class="card">
+    <button class="b" onclick="refresh()">تحديث الحالات</button>
+    <div class="wrap"><table>
+      <thead><tr><th>#</th><th>المزوّد</th><th>الخدمة</th><th>الرابط</th><th>الكمية</th><th>التكلفة</th><th>الحالة</th></tr></thead>
+      <tbody id="otb"></tbody>
+    </table></div>
+  </div>
+</section>
+</main>
+<div id="msg"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const FINAL=["Completed","Canceled","Cancelled","Refunded","Partial"];
+const load=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))||d}catch(e){return d}};
+const save=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let provs=load("provs",[]), orders=load("orders",[]), svcs=[];
+
+function msg(t){const m=$("msg");m.textContent=t;m.style.display="block";setTimeout(()=>m.style.display="none",3500)}
+
+document.querySelectorAll("header button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("header button").forEach(x=>x.classList.toggle("on",x===b));
+  ["prov","new","ord"].forEach(s=>$(s).hidden=s!==b.dataset.t);
+  if(b.dataset.t==="new")fillProv(); if(b.dataset.t==="ord")showOrders();
+});
+
+async function api(p,params){
+  const body=new URLSearchParams({key:p.key,...params});
+  const c=new AbortController(), t=setTimeout(()=>c.abort(),20000);
+  try{
+    const r=await fetch(p.url,{method:"POST",body,signal:c.signal});
+    return await r.json();
+  }catch(e){
+    throw new Error("تعذّر الاتصال (قد يمنع المزوّد الطلبات من المتصفح - CORS)");
+  }finally{clearTimeout(t)}
+}
+
+function addProv(){
+  const name=$("pn").value.trim(), url=$("pu").value.trim(), key=$("pk").value.trim();
+  if(!name||!url.startsWith("https://")||!key)return msg("أدخل الاسم ورابط https والمفتاح");
+  provs.push({id:Date.now(),name,url,key}); save("provs",provs);
+  $("pn").value=$("pu").value=$("pk").value=""; showProv();
+}
+function delProv(id){provs=provs.filter(p=>p.id!==id);save("provs",provs);showProv()}
+async function bal(id){
+  const p=provs.find(x=>x.id===id);
+  try{const r=await api(p,{action:"balance"});msg(`${p.name}: ${r.balance} ${r.currency||""}`)}
+  catch(e){msg(e.message)}
+}
+function showProv(){
+  $("plist").innerHTML=provs.map(p=>`<div class="card"><b>${esc(p.name)}</b> <span class="mu" dir="ltr">${esc(p.url)}</span><br><br>
+  <button class="b" onclick="bal(${p.id})">الرصيد</button>
+  <button class="b s" onclick="delProv(${p.id})">حذف</button></div>`).join("")||'<p class="mu">لا يوجد مزوّدون بعد.</p>';
+}
+
+function fillProv(){
+  $("np").innerHTML=provs.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join("");
+  if(provs.length)loadSvc();
+}
+async function loadSvc(){
+  const p=provs.find(x=>x.id==$("np").value); if(!p)return;
+  $("ns").innerHTML="<option>جارٍ التحميل...</option>";
+  try{svcs=await api(p,{action:"services"});if(!Array.isArray(svcs))throw new Error("استجابة غير صالحة");renderSvc()}
+  catch(e){svcs=[];$("ns").innerHTML="";msg(e.message)}
+}
+function renderSvc(){
+  const q=$("nq").value.trim().toLowerCase();
+  $("ns").innerHTML=svcs.filter(s=>!q||(s.name+" "+s.category).toLowerCase().includes(q)).slice(0,300)
+    .map(s=>`<option value="${esc(s.service)}">${esc(s.name)} - ${esc(s.rate)}/1000 [${esc(s.min)}-${esc(s.max)}]</option>`).join("");
+}
+$("ns").onchange=()=>{const s=svcs.find(x=>x.service==$("ns").value);$("si").textContent=s?`الحد: ${s.min} - ${s.max} | السعر لكل 1000: ${s.rate}`:""};
+
+async function send(){
+  const p=provs.find(x=>x.id==$("np").value), s=svcs.find(x=>x.service==$("ns").value);
+  const link=$("nl").value.trim(), qty=parseInt($("nn").value,10);
+  let ok=false; try{ok=new URL(link).protocol==="https:"||new URL(link).protocol==="http:"}catch(e){}
+  if(!p||!s||!ok||!(qty>=+s.min&&qty<=+s.max))return msg("رابط غير صحيح أو كمية خارج الحدود");
+  const btn=$("ob"); btn.disabled=true;
+  try{
+    const r=await api(p,{action:"add",service:s.service,link,quantity:qty});
+    if(!r.order)return msg("رفض المزوّد الطلب: "+(r.error||"غير معروف"));
+    orders.unshift({id:Date.now(),pid:p.id,pname:p.name,sname:s.name,link,qty,
+      cost:Math.round(s.rate*qty/1000*1e4)/1e4,po:String(r.order),status:"Pending"});
+    save("orders",orders); msg("تم إرسال الطلب بنجاح"); $("nl").value=$("nn").value="";
+  }catch(e){msg(e.message)}finally{btn.disabled=false}
+}
+
+function showOrders(){
+  $("otb").innerHTML=orders.slice(0,50).map((o,i)=>`<tr><td>${i+1}</td><td>${esc(o.pname)}</td><td>${esc(o.sname)}</td>
+  <td dir="ltr">${esc(o.link)}</td><td>${esc(o.qty)}</td><td>${esc(o.cost)}</td><td>${esc(o.status)}</td></tr>`).join("");
+}
+async function refresh(){
+  for(const o of orders.slice(0,50)){
+    if(FINAL.includes(o.status))continue;
+    const p=provs.find(x=>x.id===o.pid); if(!p)continue;
+    try{const r=await api(p,{action:"status",order:o.po});if(r.status)o.status=r.status}catch(e){}
+  }
+  save("orders",orders); showOrders();
+}
+showProv();
+</script>
+</body>
+</html>
