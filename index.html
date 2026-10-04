@@ -156,7 +156,20 @@ async function refresh(){
   }
   save("orders",orders); showOrders();
 }
-showProv();
+const PROXY="https://young-mode-1b0d.ha888mza0.workers.dev";
+async function api(p,params){
+  let pass=localStorage.getItem("pass");
+  if(!pass){pass=prompt("كلمة سر الوسيط");if(!pass)throw new Error("كلمة السر مطلوبة");localStorage.setItem("pass",pass)}
+  const c=new AbortController(), t=setTimeout(()=>c.abort(),20000);
+  try{
+    const r=await fetch(PROXY,{method:"POST",headers:{"Content-Type":"application/json","X-Pass":pass},body:JSON.stringify({url:p.url,params:{key:p.key,...params}}),signal:c.signal});
+    if(r.status===403){localStorage.removeItem("pass");throw new Error("كلمة السر خاطئة")}
+    if(r.status===400)throw new Error("نطاق المزوّد غير مسموح في الوسيط");
+    return await r.json();
+  }catch(e){
+    throw new Error(/السر|نطاق/.test(e.message)?e.message:"تعذّر الاتصال بالوسيط أو رد المزوّد غير صالح");
+  }finally{clearTimeout(t)}
+  }showProv();
 </script>
 </body>
 </html>
