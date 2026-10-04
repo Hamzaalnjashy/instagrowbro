@@ -45,9 +45,12 @@ th,td{padding:8px;border-bottom:1px solid var(--bd);text-align:right}
 
 <section id="new" hidden>
   <div class="card">
+    <label class="mu">المزوّد</label>
     <select id="np" onchange="loadSvc()"></select>
+    <label class="mu">الفئة</label>
+    <select id="nc" onchange="renderSvc()"></select>
     <input id="nq" placeholder="بحث في الخدمات..." oninput="renderSvc()">
-    <select id="ns" size="8"></select>
+    <select id="ns" size="8" onchange="pick()"></select>
     <div class="mu" id="si"></div>
     <input id="nl" placeholder="الرابط (https://...)" dir="ltr">
     <input id="nn" type="number" placeholder="الكمية">
@@ -68,6 +71,7 @@ th,td{padding:8px;border-bottom:1px solid var(--bd);text-align:right}
 <div id="msg"></div>
 
 <script>
+const PROXY="https://young-mode-1b0d.ha888mza0.workers.dev";
 const $=id=>document.getElementById(id);
 const FINAL=["Completed","Canceled","Cancelled","Refunded","Partial"];
 const load=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))||d}catch(e){return d}};
@@ -75,7 +79,7 @@ const save=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let provs=load("provs",[]), orders=load("orders",[]), svcs=[];
 
-function msg(t){const m=$("msg");m.textContent=t;m.style.display="block";setTimeout(()=>m.style.display="none",3500)}
+function msg(t){const m=$("msg");m.textContent=t;m.style.display="block";setTimeout(()=>m.style.display="none",6000)}
 
 document.querySelectorAll("header button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("header button").forEach(x=>x.classList.toggle("on",x===b));
@@ -84,14 +88,18 @@ document.querySelectorAll("header button").forEach(b=>b.onclick=()=>{
 });
 
 async function api(p,params){
-  const body=new URLSearchParams({key:p.key,...params});
-  const c=new AbortController(), t=setTimeout(()=>c.abort(),20000);
+  let pass=localStorage.getItem("pass");
+  if(!pass){pass=prompt("كلمة سر الوسيط");if(!pass)throw new Error("كلمة السر مطلوبة");localStorage.setItem("pass",pass)}
+  const c=new AbortController(), t=setTimeout(()=>c.abort(),25000);
+  let r;
   try{
-    const r=await fetch(p.url,{method:"POST",body,signal:c.signal});
-    return await r.json();
+    r=await fetch(PROXY,{method:"POST",headers:{"Content-Type":"application/json","X-Pass":pass},body:JSON.stringify({url:p.url,params:{key:p.key,...params}}),signal:c.signal});
   }catch(e){
-    throw new Error("تعذّر الاتصال (قد يمنع المزوّد الطلبات من المتصفح - CORS)");
+    throw new Error("تعذّر الوصول إلى الوسيط (قد يكون محجوباً أو يلزم VPN، أو ALLOWED_ORIGIN غير مطابق)");
   }finally{clearTimeout(t)}
+  if(r.status===403){localStorage.removeItem("pass");throw new Error("كلمة السر خاطئة")}
+  if(r.status===400)throw new Error("نطاق المزوّد غير مسموح في الوسيط (ALLOWED_HOSTS)");
+  try{return await r.json()}catch(e){throw new Error("رد غير مفهوم من الوسيط")}
 }
 
 function addProv(){
@@ -103,7 +111,9 @@ function addProv(){
 function delProv(id){provs=provs.filter(p=>p.id!==id);save("provs",provs);showProv()}
 async function bal(id){
   const p=provs.find(x=>x.id===id);
-  try{const r=await api(p,{action:"balance"});msg(`${p.name}: ${r.balance} ${r.currency||""}`)}
+  try{const r=await api(p,{action:"balance"});
+    if(r.error)return msg(p.name+": "+r.error);
+    msg(`${p.name}: ${r.balance} ${r.currency||""}`)}
   catch(e){msg(e.message)}
 }
 function showProv(){
@@ -118,21 +128,33 @@ function fillProv(){
 }
 async function loadSvc(){
   const p=provs.find(x=>x.id==$("np").value); if(!p)return;
+  svcs=[]; $("nc").innerHTML=""; $("si").textContent="";
   $("ns").innerHTML="<option>جارٍ التحميل...</option>";
-  try{svcs=await api(p,{action:"services"});if(!Array.isArray(svcs))throw new Error("استجابة غير صالحة");renderSvc()}
-  catch(e){svcs=[];$("ns").innerHTML="";msg(e.message)}
+  try{
+    const r=await api(p,{action:"services"});
+    if(!Array.isArray(r))throw new Error(r&&r.error?r.error:"استجابة غير صالحة من المزوّد");
+    svcs=r;
+    const cats=[...new Set(svcs.map(s=>s.category||"أخرى"))];
+    $("nc").innerHTML='<option value="">كل الفئات ('+svcs.length+')</option>'+cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("");
+    renderSvc();
+  }catch(e){$("ns").innerHTML="";msg(e.message)}
 }
 function renderSvc(){
-  const q=$("nq").value.trim().toLowerCase();
-  $("ns").innerHTML=svcs.filter(s=>!q||(s.name+" "+s.category).toLowerCase().includes(q)).slice(0,300)
-    .map(s=>`<option value="${esc(s.service)}">${esc(s.name)} - ${esc(s.rate)}/1000 [${esc(s.min)}-${esc(s.max)}]</option>`).join("");
+  const q=$("nq").value.trim().toLowerCase(), c=$("nc").value;
+  const list=svcs.filter(s=>(!c||(s.category||"أخرى")===c)&&(!q||(s.name+" "+(s.category||"")+" "+s.service).toLowerCase().includes(q)));
+  const shown=list.slice(0,500);
+  $("ns").innerHTML=shown.map(s=>`<option value="${esc(s.service)}">${esc(s.service)} | ${esc(s.name)} - ${esc(s.rate)}/1000 [${esc(s.min)}-${esc(s.max)}]</option>`).join("");
+  $("si").textContent=list.length>500?`يظهر 500 من ${list.length}، اختر فئة أو ابحث لتضييق القائمة`:`عدد الخدمات: ${list.length}`;
 }
-$("ns").onchange=()=>{const s=svcs.find(x=>x.service==$("ns").value);$("si").textContent=s?`الحد: ${s.min} - ${s.max} | السعر لكل 1000: ${s.rate}`:""};
+function pick(){
+  const s=svcs.find(x=>x.service==$("ns").value);
+  if(s)$("si").textContent=`الحد: ${s.min} - ${s.max} | السعر لكل 1000: ${s.rate}`;
+}
 
 async function send(){
   const p=provs.find(x=>x.id==$("np").value), s=svcs.find(x=>x.service==$("ns").value);
   const link=$("nl").value.trim(), qty=parseInt($("nn").value,10);
-  let ok=false; try{ok=new URL(link).protocol==="https:"||new URL(link).protocol==="http:"}catch(e){}
+  let ok=false; try{const pr=new URL(link).protocol;ok=pr==="https:"||pr==="http:"}catch(e){}
   if(!p||!s||!ok||!(qty>=+s.min&&qty<=+s.max))return msg("رابط غير صحيح أو كمية خارج الحدود");
   const btn=$("ob"); btn.disabled=true;
   try{
@@ -156,20 +178,7 @@ async function refresh(){
   }
   save("orders",orders); showOrders();
 }
-const PROXY="https://young-mode-1b0d.ha888mza0.workers.dev";
-async function api(p,params){
-  let pass=localStorage.getItem("pass");
-  if(!pass){pass=prompt("كلمة سر الوسيط");if(!pass)throw new Error("كلمة السر مطلوبة");localStorage.setItem("pass",pass)}
-  const c=new AbortController(), t=setTimeout(()=>c.abort(),20000);
-  try{
-    const r=await fetch(PROXY,{method:"POST",headers:{"Content-Type":"application/json","X-Pass":pass},body:JSON.stringify({url:p.url,params:{key:p.key,...params}}),signal:c.signal});
-    if(r.status===403){localStorage.removeItem("pass");throw new Error("كلمة السر خاطئة")}
-    if(r.status===400)throw new Error("نطاق المزوّد غير مسموح في الوسيط");
-    return await r.json();
-  }catch(e){
-    throw new Error(/السر|نطاق/.test(e.message)?e.message:"تعذّر الاتصال بالوسيط أو رد المزوّد غير صالح");
-  }finally{clearTimeout(t)}
-  }showProv();
+showProv();
 </script>
 </body>
 </html>
